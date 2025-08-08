@@ -10,7 +10,32 @@ load_dotenv()
 
 # Set up Google Cloud credentials
 google_creds_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-if google_creds_path:
+google_creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+
+if google_creds_json:
+    # Create credentials file from JSON environment variable
+    import tempfile
+    import json as json_lib
+    
+    try:
+        # Parse the JSON string to validate it
+        if isinstance(google_creds_json, str):
+            creds_data = json_lib.loads(google_creds_json)
+        else:
+            creds_data = google_creds_json
+            
+        # Create a temporary file for credentials
+        temp_creds_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
+        json_lib.dump(creds_data, temp_creds_file)
+        temp_creds_file.close()
+        
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file.name
+        print(f"Created Google Cloud credentials file from environment variable")
+        
+    except Exception as e:
+        print(f"Warning: Failed to process GOOGLE_APPLICATION_CREDENTIALS_JSON: {e}")
+        
+elif google_creds_path:
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = google_creds_path
 
 import aiohttp
@@ -24,15 +49,12 @@ from vertexai.generative_models import GenerativeModel
 
 # Import document processing libraries with error handling
 try:
+    # Only import what's absolutely necessary to reduce memory
     from unstructured.partition.pdf import partition_pdf
     from unstructured.partition.docx import partition_docx
-    from unstructured.partition.email import partition_email
-    from unstructured.partition.xlsx import partition_xlsx
-    from unstructured.partition.csv import partition_csv
     from unstructured.partition.text import partition_text
     from unstructured.partition.html import partition_html
-    from unstructured.partition.pptx import partition_pptx
-    from unstructured.partition.auto import partition
+    # Import other formats on-demand to save memory
     UNSTRUCTURED_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Unstructured library not fully available: {e}")
@@ -40,13 +62,8 @@ except ImportError as e:
     # Define fallback functions
     def partition_pdf(*args, **kwargs): raise ImportError("PDF processing not available")
     def partition_docx(*args, **kwargs): raise ImportError("DOCX processing not available")
-    def partition_email(*args, **kwargs): raise ImportError("Email processing not available")
-    def partition_xlsx(*args, **kwargs): raise ImportError("XLSX processing not available")
-    def partition_csv(*args, **kwargs): raise ImportError("CSV processing not available")
     def partition_text(*args, **kwargs): raise ImportError("Text processing not available")
     def partition_html(*args, **kwargs): raise ImportError("HTML processing not available")
-    def partition_pptx(*args, **kwargs): raise ImportError("PPTX processing not available")
-    def partition(*args, **kwargs): raise ImportError("Auto partition not available")
 
 # Init Vertex AI
 PROJECT_ID = os.getenv("GEMINI_PROJECT_ID")
@@ -79,6 +96,17 @@ async def check_token(
         raise HTTPException(401, "Invalid or missing token")
 
 app = FastAPI(title="Document Q&A API", version="2.0.0")
+
+# Add startup event to debug issues
+@app.on_event("startup")
+async def startup_event():
+    print("=== BAJAJ API STARTUP ===")
+    print(f"Project ID: {PROJECT_ID}")
+    print(f"Region: {REGION}")
+    print(f"API Token set: {bool(API_TOKEN)}")
+    print(f"Max Tokens: {MAX_TOKENS}")
+    print(f"Google Credentials: {bool(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))}")
+    print("=== STARTUP COMPLETE ===")
 
 rate_limiter = AsyncLimiter(max_rate=10, time_period=1.0)
 
@@ -133,16 +161,44 @@ async def download_file(url: str, max_mb: int = 100) -> str:
 
 def parse_doc(path: str) -> str:
     ext = get_ext(path)
-    if ext==".pdf": elems=partition_pdf(path,strategy="fast")
-    elif ext in (".docx",".doc"): elems=partition_docx(path)
-    elif ext in (".pptx",".ppt"): elems=partition_pptx(path)
-    elif ext in (".xlsx",".xls"): elems=partition_xlsx(path)
-    elif ext==".csv": elems=partition_csv(path)
-    elif ext in (".txt",".rtf"): elems=partition_text(path)
-    elif ext in (".html",".htm"): elems=partition_html(path)
-    elif ext in (".eml",".msg"): elems=partition_email(path)
-    else: elems=partition(path)
-    if not elems: raise HTTPException(400,"No content extracted")
+    
+    try:
+        if ext==".pdf": 
+            elems=partition_pdf(path,strategy="fast")
+        elif ext in (".docx",".doc"): 
+            elems=partition_docx(path)
+        elif ext in (".pptx",".ppt"): 
+            # Lazy import to save memory
+            from unstructured.partition.pptx import partition_pptx
+            elems=partition_pptx(path)
+        elif ext in (".xlsx",".xls"): 
+            # Lazy import to save memory
+            from unstructured.partition.xlsx import partition_xlsx
+            elems=partition_xlsx(path)
+        elif ext==".csv": 
+            # Lazy import to save memory
+            from unstructured.partition.csv import partition_csv
+            elems=partition_csv(path)
+        elif ext in (".txt",".rtf"): 
+            elems=partition_text(path)
+        elif ext in (".html",".htm"): 
+            elems=partition_html(path)
+        elif ext in (".eml",".msg"): 
+            # Lazy import to save memory
+            from unstructured.partition.email import partition_email
+            elems=partition_email(path)
+        else: 
+            # Lazy import to save memory
+            from unstructured.partition.auto import partition
+            elems=partition(path)
+            
+    except ImportError as e:
+        raise HTTPException(400, f"Document processing not available for {ext} files: {str(e)}")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to process document: {str(e)}")
+        
+    if not elems: 
+        raise HTTPException(400,"No content extracted")
     txt = "\n\n".join(str(e) for e in elems if str(e).strip())
     txt = "\n".join(l.strip() for l in txt.splitlines() if l.strip())
     return txt
