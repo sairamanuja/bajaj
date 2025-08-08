@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  bajaj-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Required Environment Variables
+      - GEMINI_PROJECT_ID=gen-lang-client-0632468289
+      - GEMINI_REGION=asia-south1
+      - API_TOKEN=650a0269eda6ed91714c00834a396c2727072511734daa3d3c7e89e60d17da41
+      - MAX_TOKENS=32000
+      # For Google Cloud credentials, use one of these approaches:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
+      # Option 2: Use Google Cloud credential JSON as environment variable
+      # - GOOGLE_APPLICATION_CREDENTIALS_JSON=${GOOGLE_APPLICATION_CREDENTIALS_JSON}
+    volumes:
+      # Mount your service account key for authentication
+      - ./service-account-key.json:/app/credentials/service-account-key.json:ro
+      - /tmp:/tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# For production deployment without docker-compose, use:
+# docker run -d \
+#   --name bajaj-api \
+#   -p 8000:8000 \
+#   -e GEMINI_PROJECT_ID=gen-lang-client-0632468289 \
+#   -e GEMINI_REGION=asia-south1 \
+#   -e API_TOKEN=650a0269eda6ed91714c00834a396c2727072511734daa3d3c7e89e60d17da41 \
+#   -e MAX_TOKENS=32000 \
+#   -v ./service-account-key.json:/app/credentials/service-account-key.json:ro \
+#   bajaj-api

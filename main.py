@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Set up Google Cloud credentials
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+google_creds_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+if google_creds_path:
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = google_creds_path
 
 import aiohttp
 from aiolimiter import AsyncLimiter
@@ -19,20 +21,45 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 import vertexai
 from vertexai.generative_models import GenerativeModel
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.docx import partition_docx
-from unstructured.partition.email import partition_email
-from unstructured.partition.xlsx import partition_xlsx
-from unstructured.partition.csv import partition_csv
-from unstructured.partition.text import partition_text
-from unstructured.partition.html import partition_html
-from unstructured.partition.pptx import partition_pptx
-from unstructured.partition.auto import partition
+
+# Import document processing libraries with error handling
+try:
+    from unstructured.partition.pdf import partition_pdf
+    from unstructured.partition.docx import partition_docx
+    from unstructured.partition.email import partition_email
+    from unstructured.partition.xlsx import partition_xlsx
+    from unstructured.partition.csv import partition_csv
+    from unstructured.partition.text import partition_text
+    from unstructured.partition.html import partition_html
+    from unstructured.partition.pptx import partition_pptx
+    from unstructured.partition.auto import partition
+    UNSTRUCTURED_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Unstructured library not fully available: {e}")
+    UNSTRUCTURED_AVAILABLE = False
+    # Define fallback functions
+    def partition_pdf(*args, **kwargs): raise ImportError("PDF processing not available")
+    def partition_docx(*args, **kwargs): raise ImportError("DOCX processing not available")
+    def partition_email(*args, **kwargs): raise ImportError("Email processing not available")
+    def partition_xlsx(*args, **kwargs): raise ImportError("XLSX processing not available")
+    def partition_csv(*args, **kwargs): raise ImportError("CSV processing not available")
+    def partition_text(*args, **kwargs): raise ImportError("Text processing not available")
+    def partition_html(*args, **kwargs): raise ImportError("HTML processing not available")
+    def partition_pptx(*args, **kwargs): raise ImportError("PPTX processing not available")
+    def partition(*args, **kwargs): raise ImportError("Auto partition not available")
 
 # Init Vertex AI
 PROJECT_ID = os.getenv("GEMINI_PROJECT_ID")
-REGION = os.getenv("GEMINI_REGION")
-vertexai.init(project=PROJECT_ID, location=REGION)
+REGION = os.getenv("GEMINI_REGION", "asia-south1")
+
+if not PROJECT_ID:
+    print("Warning: GEMINI_PROJECT_ID not set. Vertex AI functionality will be limited.")
+    
+try:
+    vertexai.init(project=PROJECT_ID, location=REGION)
+    print(f"Vertex AI initialized with project: {PROJECT_ID}, region: {REGION}")
+except Exception as e:
+    print(f"Warning: Vertex AI initialization failed: {e}")
 
 ENCODING = "cl100k_base"
 tokenizer = tiktoken.get_encoding(ENCODING)
@@ -40,7 +67,10 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "32000"))
 
 # Auth setup
 security = HTTPBearer(auto_error=True)
-API_TOKEN = os.getenv("API_TOKEN")  # set in Render
+API_TOKEN = os.getenv("API_TOKEN")
+
+if not API_TOKEN:
+    raise ValueError("API_TOKEN environment variable is required")
 
 async def check_token(
     creds: HTTPAuthorizationCredentials = Depends(security)
